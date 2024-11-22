@@ -3,6 +3,7 @@ from io import StringIO
 import requests
 import hashlib
 import mysql.connector
+import pymysql
 import os
 import re
 from datetime import datetime
@@ -13,6 +14,7 @@ def get_title(html):
     match_results = re.search(pattern, html, re.IGNORECASE)
     title = match_results.group()
     title = re.sub("<.*?>", "", title) # Remove HTML tags
+    title = title.removesuffix(" Stock Price and Quote")
     return title
 
 def getInfo(url):
@@ -42,6 +44,8 @@ def parse_currency(value):
         return float(value.replace(',', '').strip())
 
 def parse_float(value):
+    if value == '-':
+        return None
     return float(value.replace(',', '').strip()) if value else None
 
 def parse_percentage(value):
@@ -52,7 +56,6 @@ def parse_date(value):
         return datetime.strptime(value, '%b %d, %Y')
     except ValueError:
         return None
-
 
 def parseData(data):
     
@@ -120,8 +123,11 @@ def parseData(data):
     cash_sh_str = data[1][5] 
     parsed_data['cash/sh'] = parse_float(cash_sh_str)
 
-    dividend_est_str = data[1][6]  
-    parsed_data['dividendEst'] = parse_float(re.search(r'\(([\d\.]+)%\)', dividend_est_str).group(1))
+    dividend_est_str = data[1][6]
+    if dividend_est_str == '-':
+          parsed_data['dividendEst'] = None
+    else:
+        parsed_data['dividendEst'] = parse_float(re.search(r'\(([\d\.]+)%\)', dividend_est_str).group(1))
 
     dividend_ex_date_str = data[1][7]  
     parsed_data['dividendExDate'] = parse_date(dividend_ex_date_str)
@@ -156,7 +162,6 @@ def parseData(data):
     return parsed_data
 
 
-
 def DBconnect(filename):
     dirname = os.path.dirname(__file__)
     os.chdir('../_sensitive_/')
@@ -174,26 +179,34 @@ def DBconnect(filename):
 
 
 def insertComapnyData(db,subjectName,data):
+    data = list(data.values())
+    data.insert(0,subjectName)
+    print(subjectName + '\n')
+
     hashObj = hashlib.sha256()
     hashObj.update(subjectName.encode('utf-8'))
     hexHash= hashObj.hexdigest()
     id = int(hexHash,16) % 100000
+    data.insert(0,id)
+
     cursor = db.cursor()
     sql = (open("company_insert.txt", "r")).read()
-    print("SQL Query: ", sql)  # Print SQL query to ensure it's correct
-    cursor.execute(sql, (id, subjectName, data))  # Ensure you have the correct parameters
+    print("SQL Query: ", sql)
 
+    final_data = data
+    print("\n\n DATA: ", final_data)
+    cursor.execute(sql, final_data)
     db.commit()
     print(cursor.rowcount, "record inserted.")
 
-urleon = "https://finviz.com/quote.ashx?t=NEXT&ty=c&ta=1&p=d"
-urlaligent = "https://finviz.com/quote.ashx?t=A&p=d"
+urleon = "https://finviz.com/quote.ashx?t=NEXT"
+urlaligent = "https://finviz.com/quote.ashx?t=A"
 
 db = DBconnect("pass.txt")
-companyData = soupGetInfo(urlaligent)
+companyData = soupGetInfo("https://finviz.com/quote.ashx?t=FBRX&p=d")
 print(companyData)
 print(parseData(companyData[1]))
-#insertComapnyData(db,companyData[0],companyData[1].values.tolist())
+insertComapnyData(db,companyData[0],parseData(companyData[1]))
 #print(dfs[7])
 
 
