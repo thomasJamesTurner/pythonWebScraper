@@ -1,47 +1,27 @@
-import pandas as pd
-from io import StringIO
-import requests
+import urlGetter
 import hashlib
 import mysql.connector
-import pymysql
 import os
 import re
 from datetime import datetime
-from bs4 import BeautifulSoup
-
-def get_title(html):
-    pattern = "<title.*?>.*?</title.*?>"
-    match_results = re.search(pattern, html, re.IGNORECASE)
-    title = match_results.group()
-    title = re.sub("<.*?>", "", title) # Remove HTML tags
-    title = title.removesuffix(" Stock Price and Quote")
-    return title
-
-def getInfo(url):
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-    page = requests.get(url,allow_redirects=True, headers=headers)
-    subjectName = get_title(page.text)
-    html_io = StringIO(page.text)
-    dfs = pd.read_html(html_io)
-    if "https://finviz.com/quote" in url:
-        return (subjectName,dfs[7])
-
-def soupGetInfo(url):
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-    page = requests.get(url,allow_redirects=True, headers=headers)
-    subjectName = get_title(page.text)
-    soup = BeautifulSoup(page.text, 'html.parser')
-    table = soup.find('table', 'js-snapshot-table snapshot-table2 screener_snapshot-table-body')  # Adjust based on the page's table id
-    dfs = pd.read_html(StringIO(str(table)))[0]
-    return (subjectName,dfs)
 
 # Helper functions to parse data
 def parse_currency(value):
+    # If the value is '-', return None
+    if value == '-':
+        return None
+    if type(value) == float:
+        print(value)
+    # Remove commas and strip spaces for consistency
+    value = value.replace(',', '').strip()
+
+    # Check if the last character is 'B' or 'M' to handle billions and millions
     if value[-1] in ['B', 'M']:
         factor = 1e9 if value[-1] == 'B' else 1e6
-        return float(value[:-1].replace(',', '').strip()) * factor
-    else:
-        return float(value.replace(',', '').strip())
+        return float(value[:-1]) * factor
+
+    # If no 'B' or 'M', return the numeric value
+    return float(value)
 
 def parse_float(value):
     if value == '-':
@@ -60,8 +40,13 @@ def parse_date(value):
 def parseData(data):
     
     parsed_data = {}
-
-    parsed_data['index'] = data[1][0]
+    
+    
+    if(data[1][0] == '-' or data[1][0] == None):
+        parsed_data['index'] = None
+        return None
+    else:
+        parsed_data['index'] = data[1][0]
 
     income_str = data[1][2]  
     parsed_data['income'] = parse_currency(income_str)
@@ -73,7 +58,10 @@ def parseData(data):
     parsed_data['sales'] = parse_currency(sales_str)
 
     employees_str = data[1][9] 
-    parsed_data['employees'] = int(employees_str.replace(',', ''))
+    if(employees_str == '-' or employees_str == None):
+        parsed_data['employees'] = None
+    else:
+        parsed_data['employees'] = int(employees_str.replace(',', ''))
  
     shares_outstanding_str = data[9][0] 
     parsed_data['shsOutstand'] = parse_currency(shares_outstanding_str)
@@ -191,7 +179,7 @@ def insertComapnyData(db,subjectName,data):
 
     cursor = db.cursor()
     sql = (open("company_insert.txt", "r")).read()
-    print("SQL Query: ", sql)
+    
 
     final_data = data
     print("\n\n DATA: ", final_data)
@@ -199,14 +187,24 @@ def insertComapnyData(db,subjectName,data):
     db.commit()
     print(cursor.rowcount, "record inserted.")
 
-urleon = "https://finviz.com/quote.ashx?t=NEXT"
-urlaligent = "https://finviz.com/quote.ashx?t=A"
 
 db = DBconnect("pass.txt")
-companyData = soupGetInfo("https://finviz.com/quote.ashx?t=FBRX&p=d")
-print(companyData)
-print(parseData(companyData[1]))
-insertComapnyData(db,companyData[0],parseData(companyData[1]))
+f = open("companyTickers.txt","r")
+eof = False
+while eof == False:
+    line = f.readline()
+    print(line)
+    if line != None:
+        companyData = urlGetter.soupGetInfo(urlGetter.getFinvizURL(line))
+        if companyData is not None and companyData[1] is not None:
+            data = parseData(companyData[1])
+            if data is not None:
+                insertComapnyData(db,companyData[0],data)
+    else:
+        eof = True
+
+print("####### COMPLETE #######")
+
 #print(dfs[7])
 
 
