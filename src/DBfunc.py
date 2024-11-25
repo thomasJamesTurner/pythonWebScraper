@@ -1,4 +1,3 @@
-import urlGetter
 import hashlib
 import mysql.connector
 import os
@@ -186,25 +185,4 @@ def insertComapnyData(db,subjectName,data):
     cursor.execute(sql, final_data)
     db.commit()
     print(cursor.rowcount, "record inserted.")
-
-
-db = DBconnect("pass.txt")
-f = open("companyTickers.txt","r")
-eof = False
-while eof == False:
-    line = f.readline()
-    print(line)
-    if line != None:
-        companyData = urlGetter.soupGetInfo(urlGetter.getFinvizURL(line))
-        if companyData is not None and companyData[1] is not None:
-            data = parseData(companyData[1])
-            if data is not None:
-                insertComapnyData(db,companyData[0],data)
-    else:
-        eof = True
-
-print("####### COMPLETE #######")
-
-#print(dfs[7])
-
 
