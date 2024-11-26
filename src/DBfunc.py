@@ -343,7 +343,3 @@ def insertAllCompanies(filename):
                     eof = True
 
     print("####### COMPLETE #######")
-
-insertAllStock("LSE.txt", ".L")
-updateAllCompanies()
-
