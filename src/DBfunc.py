@@ -1,10 +1,48 @@
 import hashlib
+import yfinance as yf
+import urlGetter
 import mysql.connector
+from mysql.connector import IntegrityError
 import os
 import re
+import time
+import random
+import json
+from collections import deque
 from datetime import datetime
 
 # Helper functions to parse data
+
+
+def getLineIndex(filename, searchTerm, separator):
+    if(searchTerm == None):
+        return 0
+    searchTerm += separator
+    with open(filename, 'r') as file:
+        for line_num, line in enumerate(file, start=1):
+            index = line.find(searchTerm)
+            if index != -1:
+                print(f"Found {searchTerm} on line {line_num}, index {index}")
+                return line_num -1
+            
+    print("couldnt find search_term in file")
+    return 0
+
+def getLastLine(filename):
+    with open(filename, 'r') as file:
+        # Read all lines and get the last one
+        lines = file.readlines()
+        last_line = lines[-1] if lines else None  # Ensure file isn't empty
+        print(last_line)
+        return last_line
+
+def getID(value, mod):
+    hashObj = hashlib.sha256()
+    hashObj.update(value.encode('utf-8'))
+    hexHash= hashObj.hexdigest()
+    ID = int(hexHash,16) % mod
+    return ID
+
 def parse_currency(value):
     # If the value is '-', return None
     if value == '-':
@@ -170,10 +208,7 @@ def insertComapnyData(db,subjectName,data):
     data.insert(0,subjectName)
     print(subjectName + '\n')
 
-    hashObj = hashlib.sha256()
-    hashObj.update(subjectName.encode('utf-8'))
-    hexHash= hashObj.hexdigest()
-    id = int(hexHash,16) % 100000
+    id = getID(subjectName, 10000000)
     data.insert(0,id)
 
     cursor = db.cursor()
@@ -182,7 +217,133 @@ def insertComapnyData(db,subjectName,data):
 
     final_data = data
     print("\n\n DATA: ", final_data)
-    cursor.execute(sql, final_data)
+    try:
+        cursor.execute(sql, final_data)
+        db.commit()
+        print(cursor.rowcount, "record inserted.")
+    except IntegrityError as e:
+        print("cannot record data error %s",e)
+        return None
+
+def insertStockData(db, ticker, exchange, industry):
+    data = [None] *4
+    data[0] = ticker
+
+    if exchange != None:
+        exchangeID = getID(exchange,1000)
+        data[1] = exchangeID
+
+    companyID = getID(ticker,10000000)
+    data[2] = companyID
+
+    if industry != None:
+        data[3] = industry
+
+    
+    print(data)
+    cursor = db.cursor()
+    sql = (open("stock_insert.txt", "r")).read()
+    try:
+        cursor.execute(sql, data)
+        db.commit()
+        print(cursor.rowcount, "record inserted.")
+    except IntegrityError as e:
+        print("cannot record data error s%", e)
+        return None
+    
+
+
+def insertAllStock(filename, separator = "", max_retries=5):
+    sesh = urlGetter.makeSession()
+    db = DBconnect("pass.txt")
+    f = open(filename,"r")
+    last_ticker = getLastLine("log.txt")
+    i = getLineIndex(filename,last_ticker , separator)
+    eof = False
+    bigFile = f.readlines()
+    
+    while not eof:
+        retries = 0
+        try:
+            line, sep , tail = (bigFile[i].strip()).partition(separator)
+        except Exception as e:
+            print(f"Error processing line {i}: {str(e)}")
+            break  # Exit the loop if the line processing fails
+        print(line)
+        
+        if line != "":   
+            # Log the ticker being processed
+            with open("log.txt", "w") as log:
+                log.write(line)
+            
+            # Retry logic for handling failed data fetching
+            while retries < max_retries:
+                try:
+                    dat = yf.Ticker(line, session=sesh)
+                    if dat.info and 'industry' in dat.info:
+                        ind = str(dat.info.get('industry'))
+                        print(f"Industry for {line}: {ind}")
+                        print(line)
+                        insertStockData(db, line, dat.info.get('exchange'), ind)
+                    break  # Break the retry loop if the request is successful
+                except Exception as e:
+                    print(f"Exception type: {type(e).__name__} for ticker {line}")
+                    if isinstance(e, json.JSONDecodeError):
+                        print(f"Error decoding JSON for {line}: {e}")
+                    else:
+                        print(f"Unexpected error for {line}: {e}")
+                    
+                    retries += 1
+                    if retries < max_retries:
+                        # Exponential backoff: wait for 2^retries seconds before retrying
+                        sleep_time = random.randrange(2 ** retries, 2 ** (retries + 1))  # Exponential backoff
+                        print(f"Retrying in {sleep_time} seconds...")
+                        time.sleep(sleep_time)
+                    else:
+                        print(f"Max retries reached for {line}. Skipping.")
+                        break  # Skip to the next ticker after max retries
+                
+        else:
+            eof = True
+        i += 1
+
+    print("####### COMPLETE #######")
+
+
+def updateAllCompanies():
+    db = DBconnect("pass.txt")
+    cursor = db.cursor()
+    sql = (open("update_company.txt", "r")).read()
+    cursor.execute(sql)
     db.commit()
-    print(cursor.rowcount, "record inserted.")
+
+def insertAllCompanies(filename):
+    print("## INSERT ALL COMPANIES ##")
+    db = DBconnect("pass.txt")
+    f = open(filename,"r")
+    lastTicker = deque(open("log.txt","r"))[-1]
+    if lastTicker != "":
+        index = f.find(lastTicker)
+        if index == -1:
+            print("the last ticker could not be found in file")
+        else:
+            eof = False
+            while eof == False:
+                line,sep,tail = (f.readline()).partition("	")
+                print(line)
+                if line != None:
+                    log = open("log.txt","w")
+                    log.write(line)
+                    companyData = urlGetter.soupGetInfo(urlGetter.getFinvizURL(line))
+                    if companyData is not None and companyData[1] is not None:
+                        data = parseData(companyData[1])
+                        if data is not None:
+                            insertComapnyData(db,companyData[0],data)
+                else:
+                    eof = True
+
+    print("####### COMPLETE #######")
+
+insertAllStock("LSE.txt", ".L")
+updateAllCompanies()
 

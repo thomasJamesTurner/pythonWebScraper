@@ -3,22 +3,39 @@ import pandas as pd
 import requests
 from io import StringIO
 import re
+import sys
 
 def get_title(html):
     pattern = "<title.*?>.*?</title.*?>"
     match_results = re.search(pattern, html, re.IGNORECASE)
-    title = match_results.group()
-    title = re.sub("<.*?>", "", title) # Remove HTML tags
-    title = title.removesuffix(" Stock Price and Quote")
-    return title
+    if match_results != None:
+        title = match_results.group()
+        title = re.sub("<.*?>", "", title) # Remove HTML tags
+        title = title.removesuffix(" Stock Price and Quote")
+        ticker,sep,tail = title.partition(" -")
+        return ticker
+    return None
+
+def makeSession():
+    session = requests.session()
+    headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:66.0) Gecko/20100101 Firefox/66.0",
+    "Accept-Encoding": "*",
+    "Connection": "keep-alive"
+    }
+    return session.headers.update(headers)
 
 def soupGetInfo(url):
+    print("## GETTING INFO~~ MAKING CONNECTION ##")
     headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:66.0) Gecko/20100101 Firefox/66.0",
     "Accept-Encoding": "*",
     "Connection": "keep-alive"
     }
     page = requests.get(url,allow_redirects=True, headers=headers)
+    
+    if page.status_code == 429:
+        sys.exit()
     subjectName = get_title(page.text)
     soup = BeautifulSoup(page.text, 'html.parser')
     table = soup.find('table', 'js-snapshot-table snapshot-table2 screener_snapshot-table-body')  # Adjust based on the page's table id
@@ -37,5 +54,6 @@ def soupGetInfo(url):
 
 def getFinvizURL(ticker):
     return "https://finviz.com/quote.ashx?t=" + ticker
+
 
 
