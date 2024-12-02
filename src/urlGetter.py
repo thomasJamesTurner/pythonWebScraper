@@ -23,7 +23,8 @@ def makeSession():
     "Accept-Encoding": "*",
     "Connection": "keep-alive"
     }
-    return session.headers.update(headers)
+    sesh = session.headers.update(headers)
+    return sesh
 
 def soupGetInfo(url):
     print("## GETTING INFO~~ MAKING CONNECTION ##")
@@ -36,7 +37,6 @@ def soupGetInfo(url):
     
     if page.status_code == 429:
         sys.exit()
-    subjectName = get_title(page.text)
     soup = BeautifulSoup(page.text, 'html.parser')
     table = soup.find('table', 'js-snapshot-table snapshot-table2 screener_snapshot-table-body')  # Adjust based on the page's table id
     try:
@@ -46,7 +46,7 @@ def soupGetInfo(url):
             dfs = pd.read_html(StringIO(str(table)))[0]  # Get the first table
             if dfs[0][0] != "Index" :
                 return None
-        return subjectName ,dfs
+        return dfs
     except ValueError as e:
         # Catch the error if no table could be read
         return None

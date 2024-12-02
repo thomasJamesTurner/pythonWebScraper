@@ -8,7 +8,7 @@ import re
 import time
 import random
 import json
-from collections import deque
+import datetime
 from datetime import datetime
 
 # Helper functions to parse data
@@ -203,29 +203,7 @@ def DBconnect(filename):
     return mydb
 
 
-def insertComapnyData(db,subjectName,data):
-    data = list(data.values())
-    data.insert(0,subjectName)
-    print(subjectName + '\n')
-
-    id = getID(subjectName, 10000000)
-    data.insert(0,id)
-
-    cursor = db.cursor()
-    sql = (open("company_insert.txt", "r")).read()
-    
-
-    final_data = data
-    print("\n\n DATA: ", final_data)
-    try:
-        cursor.execute(sql, final_data)
-        db.commit()
-        print(cursor.rowcount, "record inserted.")
-    except IntegrityError as e:
-        print("cannot record data error %s",e)
-        return None
-
-def insertStockData(db, ticker, exchange, industry):
+def insertStock(db, ticker, exchange, industry):
     data = [None] *4
     data[0] = ticker
 
@@ -242,7 +220,7 @@ def insertStockData(db, ticker, exchange, industry):
     
     print(data)
     cursor = db.cursor()
-    sql = (open("stock_insert.txt", "r")).read()
+    sql = (open("sql/stock_insert.txt", "r")).read()
     try:
         cursor.execute(sql, data)
         db.commit()
@@ -251,8 +229,6 @@ def insertStockData(db, ticker, exchange, industry):
         print("cannot record data error s%", e)
         return None
     
-
-
 def insertAllStock(filename, separator = "", max_retries=5):
     sesh = urlGetter.makeSession()
     db = DBconnect("pass.txt")
@@ -265,7 +241,10 @@ def insertAllStock(filename, separator = "", max_retries=5):
     while not eof:
         retries = 0
         try:
-            line, sep , tail = (bigFile[i].strip()).partition(separator)
+            if separator != "":
+                line, sep , tail = (bigFile[i].strip()).partition(separator)
+            else:
+                line = bigFile[i].strip()
         except Exception as e:
             print(f"Error processing line {i}: {str(e)}")
             break  # Exit the loop if the line processing fails
@@ -284,7 +263,7 @@ def insertAllStock(filename, separator = "", max_retries=5):
                         ind = str(dat.info.get('industry'))
                         print(f"Industry for {line}: {ind}")
                         print(line)
-                        insertStockData(db, line, dat.info.get('exchange'), ind)
+                        insertStock(db, line, dat.info.get('exchange'), ind)
                     break  # Break the retry loop if the request is successful
                 except Exception as e:
                     print(f"Exception type: {type(e).__name__} for ticker {line}")
@@ -310,6 +289,7 @@ def insertAllStock(filename, separator = "", max_retries=5):
     print("####### COMPLETE #######")
 
 
+
 def updateAllCompanies():
     db = DBconnect("pass.txt")
     cursor = db.cursor()
@@ -317,29 +297,248 @@ def updateAllCompanies():
     cursor.execute(sql)
     db.commit()
 
-def insertAllCompanies(filename):
-    print("## INSERT ALL COMPANIES ##")
+
+
+def insertComapnyData(db,subjectName,data):
+    data = list(data.values())
+    data.insert(0,subjectName)
+    print(subjectName + '\n')
+
+    id = getID(subjectName, 10000000)
+    data.insert(0,id)
+
+    cursor = db.cursor()
+    sql = (open("sql/company_insert.txt", "r")).read()
+    
+
+    final_data = data
+    print("\n\n DATA: ", final_data)
+    try:
+        cursor.execute(sql, final_data)
+        db.commit()
+        print(cursor.rowcount, "record inserted.")
+    except IntegrityError as e:
+        print("cannot record data error %s",e)
+        return None
+
+def insertAllCompanies(filename, separator = "", max_retries=5):
+    sesh = urlGetter.makeSession()
     db = DBconnect("pass.txt")
     f = open(filename,"r")
-    lastTicker = deque(open("log.txt","r"))[-1]
-    if lastTicker != "":
-        index = f.find(lastTicker)
-        if index == -1:
-            print("the last ticker could not be found in file")
+    last_ticker = getLastLine("log.txt")
+    if(last_ticker != None):
+        i = getLineIndex(filename,last_ticker , separator)
+    else:
+        print("NO TICKER FOUND IN LOG")
+        i = 0
+    eof = False
+    bigFile = f.readlines()
+    
+    while not eof:
+        retries = 0
+        try:
+            if separator != "":
+                line, sep , tail = (bigFile[i].strip()).partition(separator)
+            else:
+                line = bigFile[i].strip()
+        except Exception as e:
+            print(f"Error processing line {i}: {str(e)}")
+            break  # Exit the loop if the line processing fails
+        print(line)
+        
+        if line != "":   
+            # Log the ticker being processed
+            with open("log.txt", "w") as log:
+                log.write(line)
+            
+            # Retry logic for handling failed data fetching
+            while retries < max_retries:
+                try:
+                    dat = yf.Ticker(line, session=sesh)
+                    if dat.info and 'industry' in dat.info:
+                        ind = str(dat.info.get('industry'))
+                        print(f"Industry for {line}: {ind}")
+                        print(line)
+                        data = parseData(urlGetter.soupGetInfo(urlGetter.getFinvizURL(line)))
+                        insertComapnyData(db,line,data)
+                    break  # Break the retry loop if the request is successful
+                except Exception as e:
+                    print(f"Exception type: {type(e).__name__} for ticker {line}")
+                    if isinstance(e, json.JSONDecodeError):
+                        print(f"Error decoding JSON for {line}: {e}")
+                    else:
+                        print(f"Unexpected error for {line}: {e}")
+                    
+                    retries += 1
+                    if retries < max_retries:
+                        # Exponential backoff: wait for 2^retries seconds before retrying
+                        sleep_time = random.randrange(2 ** retries, 2 ** (retries + 1))  # Exponential backoff
+                        print(f"Retrying in {sleep_time} seconds...")
+                        time.sleep(sleep_time)
+                    else:
+                        print(f"Max retries reached for {line}. Skipping.")
+                        break  # Skip to the next ticker after max retries
+                
         else:
-            eof = False
-            while eof == False:
-                line,sep,tail = (f.readline()).partition("	")
-                print(line)
-                if line != None:
-                    log = open("log.txt","w")
-                    log.write(line)
-                    companyData = urlGetter.soupGetInfo(urlGetter.getFinvizURL(line))
-                    if companyData is not None and companyData[1] is not None:
-                        data = parseData(companyData[1])
-                        if data is not None:
-                            insertComapnyData(db,companyData[0],data)
-                else:
-                    eof = True
+            eof = True
+        i += 1
 
     print("####### COMPLETE #######")
+
+
+
+def insertStockData(db,data):
+    print(data)
+    cursor = db.cursor()
+    sql = (open("sql/stockData_insert.txt", "r")).read()
+    try:
+        cursor.execute(sql, data)
+        db.commit()
+        print(cursor.rowcount, "record inserted.")
+    except IntegrityError as e:
+        print("cannot record data error s%", e)
+        return None
+    
+def insertAllStockData(filename, separator = "", max_retries=5):
+    sesh = urlGetter.makeSession()
+    db = DBconnect("pass.txt")
+    f = open(filename,"r")
+    last_ticker = getLastLine("log.txt")
+    i = getLineIndex(filename,last_ticker , separator)
+    eof = False
+    bigFile = f.readlines()
+    
+    while not eof:
+        retries = 0
+        try:
+            if separator != "":
+                line, sep , tail = (bigFile[i].strip()).partition(separator)
+            else:
+                line = bigFile[i].strip()
+        except Exception as e:
+            print(f"Error processing line {i}: {str(e)}")
+            break  # Exit the loop if the line processing fails
+        print(line)
+        
+        if line != "":   
+            # Log the ticker being processed
+            with open("log.txt", "w") as log:
+                log.write(line)
+            
+            # Retry logic for handling failed data fetching
+            while retries < max_retries:
+                try:
+                    dat = yf.download(tickers=line, session=sesh,start="2024-09-30", end="2024-11-27", interval="1d")
+                    print(dat)
+                    if not dat.empty:
+                        
+                        for iterable,row in dat.iterrows():
+                            date = row.name.date()
+                            print(date)
+                            data = [getID(line,10000000),date, row.iloc[4],row.iloc[1] , row.iloc[2], row.iloc[3], row.iloc[5], row.iloc[0]]
+                            print(row.name)
+                            insertStockData(db,data)
+                    else:
+                        print("\n\nno data found for {line}")
+                    break  # Break the retry loop if the request is successful
+                except Exception as e:
+                    print(f"Exception type: {type(e).__name__} for ticker {line}")
+                    if isinstance(e, json.JSONDecodeError):
+                        print(f"Error decoding JSON for {line}: {e}")
+                    else:
+                        print(f"Unexpected error for {line}: {e}")
+                    
+                    retries += 1
+                    if retries < max_retries:
+                        # Exponential backoff: wait for 2^retries seconds before retrying
+                        sleep_time = random.randrange(2 ** retries, 2 ** (retries + 1))  # Exponential backoff
+                        print(f"Retrying in {sleep_time} seconds...")
+                        time.sleep(sleep_time)
+                    else:
+                        print(f"Max retries reached for {line}. Skipping.")
+                        break  # Skip to the next ticker after max retries
+                
+        else:
+            eof = True
+        i += 1
+
+    print("####### COMPLETE #######")
+
+
+def updateStockData(filename, separator = "", max_retries=5):
+    db = DBconnect("pass.txt")
+    cursor = db.cursor()
+    query = "SELECT MAX(dateCollected) AS most_recent_date FROM stockData;"
+    cursor.execute(query)
+    startDate = str((cursor.fetchone())[0].date())
+    
+    print(startDate)
+
+    endDate = str((datetime.today()).date())
+    print(endDate)
+    sesh = urlGetter.makeSession()
+    f = open(filename,"r")
+    last_ticker = getLastLine("log.txt")
+    i = getLineIndex(filename,last_ticker , separator)
+    eof = False
+    bigFile = f.readlines()
+    
+    while not eof:
+        retries = 0
+        try:
+            if separator != "":
+                line, sep , tail = (bigFile[i].strip()).partition(separator)
+            else:
+                line = bigFile[i].strip()
+        except Exception as e:
+            print(f"Error processing line {i}: {str(e)}")
+            break  # Exit the loop if the line processing fails
+        
+        if line != "":   
+            # Log the ticker being processed
+            log = open("log.txt", "w")
+            log.write(line)
+            
+            # Retry logic for handling failed data fetching
+            while retries < max_retries:
+                try:
+                    dat = yf.download(tickers=line, session=sesh,start=startDate, end=endDate, interval="1d")
+                    print(dat)
+                    if not dat.empty:
+                        
+                        for iterable,row in dat.iterrows():
+                            date = row.name.date()
+                            print("### ROW ###")
+                            print(date)
+                            data = [getID(line,10000000),date, row.iloc[4],row.iloc[1] , row.iloc[2], row.iloc[3], row.iloc[5], row.iloc[0]]
+                            
+                            
+                            insertStockData(db,data)
+                    else:
+                        print("\n\nno data found for {line}")
+                    break  # Break the retry loop if the request is successful
+                except Exception as e:
+                    print(f"Exception type: {type(e).__name__} for ticker {line}")
+                    if isinstance(e, json.JSONDecodeError):
+                        print(f"Error decoding JSON for {line}: {e}")
+                    else:
+                        print(f"Unexpected error for {line}: {e}")
+                    
+                    retries += 1
+                    if retries < max_retries:
+                        # Exponential backoff: wait for 2^retries seconds before retrying
+                        sleep_time = random.randrange(2 ** retries, 2 ** (retries + 1))  # Exponential backoff
+                        print(f"Retrying in {sleep_time} seconds...")
+                        time.sleep(sleep_time)
+                    else:
+                        print(f"Max retries reached for {line}. Skipping.")
+                        break  # Skip to the next ticker after max retries
+                
+        else:
+            eof = True
+        i += 1
+    log.truncate(0)
+    log.close()
+    print("####### COMPLETE #######")
+
+
