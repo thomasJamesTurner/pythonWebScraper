@@ -3,13 +3,14 @@ import yfinance as yf
 import urlGetter
 import mysql.connector
 from mysql.connector import IntegrityError
+from mysql.connector import errorcode
 import os
 import re
 import time
 import random
 import json
 import datetime
-from datetime import datetime
+from datetime import datetime ,timedelta
 
 # Helper functions to parse data
 
@@ -195,10 +196,10 @@ def DBconnect(filename):
     
     os.chdir(dirname)
     mydb = mysql.connector.connect(
-        host="localhost",
+        host= details[5],
         user= details[1],
         password=details[3],
-        database="stock_information"
+        database="stocks"
     )
     return mydb
 
@@ -470,8 +471,8 @@ def updateStockData(filename, separator = "", max_retries=5):
     cursor = db.cursor()
     query = "SELECT MAX(dateCollected) AS most_recent_date FROM stockData;"
     cursor.execute(query)
-    startDate = str((cursor.fetchone())[0].date())
-    
+    startDate = (cursor.fetchone())[0].date()
+    startDate = str(startDate +  timedelta(days=1))
     print(startDate)
 
     endDate = str((datetime.today()).date())
@@ -523,7 +524,6 @@ def updateStockData(filename, separator = "", max_retries=5):
                         print(f"Error decoding JSON for {line}: {e}")
                     else:
                         print(f"Unexpected error for {line}: {e}")
-                    
                     retries += 1
                     if retries < max_retries:
                         # Exponential backoff: wait for 2^retries seconds before retrying
@@ -537,8 +537,22 @@ def updateStockData(filename, separator = "", max_retries=5):
         else:
             eof = True
         i += 1
+    completeDataUpdate()
     log.truncate(0)
     log.close()
     print("####### COMPLETE #######")
 
 
+def completeDataUpdate():
+    db = DBconnect("pass.txt")
+    cursor  = db.cursor()
+    print("updating midpoint and percentage change")
+    sql = (open("sql/stockData_update.txt", "r")).read()
+    try:
+        cursor.execute(sql)
+        db.commit()
+        print("finished updating")
+    except IntegrityError as e:
+        print("cannot update data error ", e)
+        return None
+    
